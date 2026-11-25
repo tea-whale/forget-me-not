@@ -1,6 +1,10 @@
+import { avatarEn } from './avatar.js'
+import { memoryEn } from './memory.js'
 import type { zh } from './zh.js'
 
 export const en = {
+  ...avatarEn,
+  ...memoryEn,
   welcomeMessageChat250808: 'How can I help you?',
   contentCaveat: 'AI-generated, for reference only',
   expandSiderbarButton: 'Open sidebar',

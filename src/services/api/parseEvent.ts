@@ -139,7 +139,9 @@ const readBlock = (value: unknown): OutputBlockStart | null => {
       } as OutputBlockStart
     }
     case 'tool_use':
-      // 不展示客户端工具内容；交给回复归并层关闭这条回复的续写能力。
+      if (!isString(value.id) || !isString(value.name)) {
+        return null
+      }
       break
     default:
       return null
@@ -158,6 +160,8 @@ const readDelta = (value: unknown): ContentBlockDelta | null => {
       return isString(value.thinking) ? (value as ContentBlockDelta) : null
     case 'signature_delta':
       return isString(value.signature) ? (value as ContentBlockDelta) : null
+    case 'input_json_delta':
+      return isString(value.partial_json) ? (value as ContentBlockDelta) : null
     case 'citations_delta':
       return isCitation(value.citation) ? (value as ContentBlockDelta) : null
     default:
@@ -165,11 +169,27 @@ const readDelta = (value: unknown): ContentBlockDelta | null => {
   }
 }
 
-const isUsage = (value: unknown) =>
-  isRecord(value) &&
-  ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens'].every(
-    (key) => typeof value[key] === 'number' && Number.isFinite(value[key])
+const isUsage = (value: unknown) => {
+  if (!isRecord(value)) {
+    return false
+  }
+  const keys = [
+    'input_tokens',
+    'cache_creation_input_tokens',
+    'cache_read_input_tokens',
+    'output_tokens',
+  ]
+  const counts = (record: Record<string, unknown>, names: string[]) => names.every((key) =>
+    record[key] === undefined || (typeof record[key] === 'number' && Number.isFinite(record[key]) && record[key] >= 0))
+  const details = value.output_tokens_details
+  const tools = value.server_tool_use
+  return (
+    [...keys, 'output_tokens_details', 'server_tool_use'].some((key) => value[key] !== undefined) &&
+    counts(value, keys) &&
+    (details === undefined || (isRecord(details) && counts(details, ['thinking_tokens', 'safety_tokens']))) &&
+    (tools === undefined || (isRecord(tools) && counts(tools, ['web_search_requests', 'tool_search', 'web_fetch_requests', 'tool_fetch', 'tool_image_search'])))
   )
+}
 
 /** 未识别或无法安全消费的事件静默丢弃，不影响后续有效内容与正常结束。 */
 export const readMessageEvent = (value: unknown): MessageStreamEvent | null => {

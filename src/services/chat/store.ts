@@ -1,7 +1,9 @@
 import { create } from 'zustand'
 import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { createId } from '../../utils/id.js'
-import { ApiError, streamMessage } from '../api/client.js'
+import { ApiError } from '../api/client.js'
+import { buildMemoryContext } from '../memory/context.js'
+import { streamMemoryMessage } from '../memory/stream.js'
 import type { ChatModel, CreateMessageRequest } from '../api/types.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import {
@@ -46,7 +48,8 @@ const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
 /** 安全审核固定开启，所有请求都走扩展模式 */
-const SAFETY_CHECK = { level: 'high' } as const
+/** 服务端内容审核默认档位；外审要求仅做基础检查 */
+const SAFETY_CHECK = { level: 'low' } as const
 /** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
@@ -1021,18 +1024,49 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           initial.thinking ?? false,
           latestReminder
         )
-        const events = streamMessage(
+        const memory = await buildMemoryContext(prepared.question.content, controller.signal)
+        throwIfAborted(controller.signal)
+        reply = {
+          ...reply,
+          memory: memory
+            ? {
+                references: memory.references,
+                retrieval: memory.retrieval,
+                embeddingTokens:
+                  memory.embeddingTokens === undefined &&
+                  prepared.prefix?.memory?.embeddingTokens === undefined
+                    ? undefined
+                    : (memory.embeddingTokens ?? 0) +
+                      (prepared.prefix?.memory?.embeddingTokens ?? 0),
+              }
+            : undefined,
+        }
+        if (memory?.recall) {
+          // Ephemeral recall is only added to this request, never replayed as historical reminders.
+          const questionIndex = messages.findLastIndex((message) => message.role === 'user')
+          messages.splice(questionIndex, 0, { role: 'latest_reminder', content: memory.recall })
+        }
+        const events = streamMemoryMessage(
           useSettings.getState().apiKey ?? '',
           {
             model: initial.model ?? MODEL,
-            system: SYSTEM_PROMPT,
+            system: [SYSTEM_PROMPT, memory?.system].filter(Boolean).join('\n\n'),
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
             safety_check: SAFETY_CHECK,
             tools: serverTools(initial.search ?? false),
             ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
           },
-          controller.signal
+          controller.signal,
+          {
+            sessionId,
+            previousUsage: reply.usage,
+            onNotice: (notice) => {
+              reply = { ...reply, memoryNotices: [...(reply.memoryNotices ?? []), notice] }
+              flush()
+              persist(sessionId)
+            },
+          }
         )
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {

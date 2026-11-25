@@ -2,6 +2,11 @@
 
 English | [简体中文](README.zh-CN.md)
 
+> **Fork notice.** This repository is a fork of
+> [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo) (MIT, © 2026 DeepSeek),
+> with the modifications listed below. See [NOTICE](NOTICE) and [LICENSE](LICENSE) for
+> attribution details.
+
 A static chat demo powered by the DeepSeek API. No application backend is required: the browser connects directly to the configured API service.
 
 You can [try the app online](https://deepseek-ai.github.io/chat-demo/) or download the archive from [Releases](https://github.com/deepseek-ai/deepseek-chat-demo/releases), extract it, and double-click `index.html` to use it locally without installation or a build. Enter your API key in Settings before your first chat.
@@ -42,6 +47,45 @@ Your API key and settings are stored in the browser's localStorage. Conversation
 History import and export in Settings use ZIP archives. After confirmation and successful validation, importing replaces all local conversations and attachments. Exports include conversations and locally available original images, but exclude API keys, settings, and original non-image attachments. See the [history import/export documentation (Chinese)](src/services/chat/history/README.md) for the archive format and preservation details.
 
 Settings → Data → Delete all chats clears all local conversations, original attachments, and unsent drafts after confirmation. It stops ongoing replies and returns to a new chat. Your API key and settings are preserved; files already uploaded to the API service are not deleted.
+
+## What this fork adds
+
+On top of the upstream demo:
+
+- **Memory library.** "Core" memories are injected into every request; other memories are
+  retrieved per question with a local BM25 index for Chinese/English text. Point the app at
+  an OpenAI-compatible embedding endpoint in Settings → Memory to enable hybrid
+  vector + text retrieval; it falls back to text search when the service is unavailable.
+- **AI-editable memories.** The model gets `memory_search` and `memory_edit` tools, so it can
+  create, revise and delete memories itself. Writes use revision guards, are audited, and can
+  be undone from Settings → Memory.
+- **Token and cache usage.** Every reply shows input/output/total tokens and the prompt-cache
+  hit rate, accumulated across tool round trips and continuations.
+- **Configurable assistant avatar.** Click the circular avatar above the prompt to pick an
+  image; it is resized locally and reused next to every assistant reply.
+- **`safety_check` set to `low`** instead of the upstream hard-coded `high`.
+- **Android build.** `android/` wraps the built bundle in a WebView and packages an APK.
+
+## Android build
+
+The app stays a static site; the Android project only hosts `dist/`.
+
+Requirements: JDK 17+, Android SDK platform 35 and build-tools 35.0.0 (no Gradle needed).
+
+```sh
+pnpm build
+pwsh android/build-apk.ps1      # PowerShell on Windows, macOS or Linux
+```
+
+The signed APK is written to `android/build/`. Replace the launcher icon and default avatar
+with your own artwork by running:
+
+```sh
+python tools/brand-assets.py path/to/logo.png
+```
+
+Without an argument the script regenerates the built-in mark. `android/assets/` and
+`android/build/` are generated output and are not tracked.
 
 ## Development
 

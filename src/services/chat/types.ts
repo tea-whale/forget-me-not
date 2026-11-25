@@ -1,3 +1,4 @@
+import type { MemoryContext, MemoryNotice } from '../memory/types.js'
 import type { TranslationMessage } from '../../i18n/index.js'
 import type { ApiErrorKind } from '../api/client.js'
 import type {
@@ -92,8 +93,10 @@ export type AssistantMessage = MessageBranch & {
   blocks: ReplyBlock[]
   stopReason?: StopReason
   stopDetails?: StopDetails
-  /** 最近一次请求的用量，续写后更新 */
+  /** Cumulative API usage for this answer, including tools and continuations. */
   usage?: MessageUsage
+  memory?: Omit<MemoryContext, 'system' | 'recall'>
+  memoryNotices?: MemoryNotice[]
   error?: {
     /** upload：发送前补传附件失败，请求没有发出 */
     kind: ApiErrorKind | 'upload'

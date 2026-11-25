@@ -1,4 +1,9 @@
+import { avatarZh } from './avatar.js'
+import { memoryZh } from './memory.js'
+
 export const zh = {
+  ...avatarZh,
+  ...memoryZh,
   welcomeMessageChat250808: '今天有什么可以帮到你？',
   contentCaveat: '内容由 AI 生成，请仔细甄别',
   expandSiderbarButton: '打开边栏',

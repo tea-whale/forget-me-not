@@ -17,6 +17,8 @@ type Settings = {
   thinking: boolean
   search: boolean
   siderCollapsed: boolean
+  /** 助手头像，data URL；null 表示使用内置默认头像 */
+  assistantAvatar: string | null
 }
 
 const KEYS = {
@@ -28,6 +30,7 @@ const KEYS = {
   thinking: 'chat-demo:thinking',
   search: 'chat-demo:search',
   siderCollapsed: 'chat-demo:sider-collapsed',
+  assistantAvatar: 'chat-demo:assistant-avatar',
 } as const
 
 const read = (key: string) => {
@@ -87,6 +90,12 @@ const initialThemePreference = (): ThemePreference => {
 /** 未保存过时使用服务端默认音色 stella（海星） */
 const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide' : 'stella')
 
+/** 头像只接受受限大小的图片 data URL，避免损坏的本地存储撑爆主线程。 */
+const initialAvatar = (): string | null => {
+  const saved = read(KEYS.assistantAvatar)
+  return saved?.startsWith('data:image/') && saved.length <= 600_000 ? saved : null
+}
+
 export const useSettings = create<Settings>(() => ({
   apiKey: read(KEYS.apiKey),
   locale: initialLocale(),
@@ -96,6 +105,7 @@ export const useSettings = create<Settings>(() => ({
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
+  assistantAvatar: initialAvatar(),
 }))
 
 export const setLocale = (locale: Locale) => {
@@ -137,4 +147,9 @@ export const setSearch = (search: boolean) => {
 export const setSiderCollapsed = (siderCollapsed: boolean) => {
   write(KEYS.siderCollapsed, String(siderCollapsed))
   useSettings.setState({ siderCollapsed })
+}
+
+export const setAssistantAvatar = (assistantAvatar: string | null) => {
+  write(KEYS.assistantAvatar, assistantAvatar)
+  useSettings.setState({ assistantAvatar })
 }

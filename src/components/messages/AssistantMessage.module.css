@@ -1,5 +1,8 @@
 .message {
   position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
 
   &:hover .actions,
   &:focus-within .actions {
@@ -9,6 +12,16 @@
   :global(.ds-assistant-message-main-content) {
     padding-bottom: 6px;
   }
+}
+
+.messageAvatar {
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.messageBody {
+  flex: 1;
+  min-width: 0;
 }
 
 .waiting {

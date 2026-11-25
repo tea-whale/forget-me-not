@@ -1,0 +1,22 @@
+This product includes software derived from DeepSeek's open-source chat demo.
+
+  deepseek-ai/chat-demo
+  https://github.com/deepseek-ai/chat-demo
+  Copyright (c) 2026 DeepSeek
+  MIT License (see LICENSE)
+
+Modifications in this fork, Copyright (c) 2026 the fork authors, MIT License:
+
+  - local memory library: always-injected core memories plus question-scoped
+    retrieval (BM25 for Chinese/English, optional hybrid vector search through
+    an OpenAI-compatible embedding endpoint);
+  - model-driven memory tools (memory_search / memory_edit) with revision
+    guards, an audit log and undo;
+  - per-reply token and prompt-cache usage display;
+  - configurable assistant avatar on the welcome screen and every reply;
+  - safety_check level lowered from "high" to "low";
+  - Android WebView wrapper (android/), brand assets and the "Forge Me Not"
+    application name.
+
+DeepSeek, the DeepSeek logo and the DeepSeek API are provided by DeepSeek.
+This fork is an independent project and is not endorsed by DeepSeek.

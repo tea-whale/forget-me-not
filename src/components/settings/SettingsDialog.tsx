@@ -35,6 +35,7 @@ import { Select } from '../base/Select.js'
 import { showToast } from '../base/toastState.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
+import { MemorySettings } from './MemorySettings.js'
 import styles from './Settings.module.css'
 
 /**
@@ -53,6 +54,7 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
     label: 'settingDialogAsideGeneralOptionLabel',
     icon: <IconSettingsOutline16 />,
   },
+  { value: 'memory', label: 'memoryTitle', icon: <IconDataOutline16 /> },
   { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
 ]
 
@@ -107,6 +109,8 @@ const SettingsContent = ({
               <TtsVoiceSetting />
               <LocationSetting />
             </>
+          ) : section === 'memory' ? (
+            <MemorySettings />
           ) : (
             <>
               <ApiKeyField editor={apiKeyEditor} />

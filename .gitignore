@@ -9,3 +9,6 @@ build/
 .env.*
 !.env.example
 tmp/
+android/assets/
+android/build/
+*.apk

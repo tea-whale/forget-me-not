@@ -1,7 +1,8 @@
 /**
  * Messages API（Anthropic 兼容格式）协议类型，只取本应用用到的部分。
  * 文档：https://api-docs.deepseek.com/zh-cn/api/create-message
- * 声明 deepseek_web_search / deepseek_read_url 或设置 safety_check.level 为 high 时进入扩展模式。
+ * 声明 deepseek_web_search / deepseek_read_url 时进入扩展模式。
+ * safety_check.level 默认 low（只做基础检查），high 为加强审核。
  */
 
 export type ChatModel = 'deepseek-flash' | 'deepseek-v4-pro'
@@ -146,7 +147,21 @@ export type WebSearchToolResultBlockParam = WebSearchToolResultBlock
 /** 只回传 read_link 结果；成功时原样保留 signature，供服务端解密恢复网页上下文 */
 export type WebFetchToolResultBlockParam = WebFetchToolResultBlock
 
+export type ToolResultBlockParam = {
+  type: 'tool_result'
+  tool_use_id: string
+  content: string
+  is_error?: boolean
+}
+
+export type ClientTool = {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+}
+
 export type AssistantBlockParam =
+  | ToolUseBlock
   | TextBlockParam
   | ThinkingBlock
   | ServerToolUseBlockParam
@@ -157,7 +172,7 @@ export type AssistantBlockParam =
 export type MessageParam =
   /** Chat Engine 扩展角色，位于对应 user 前；需服务端支持 latest_reminder。 */
   | { role: 'latest_reminder'; content: string }
-  | { role: 'user'; content: string | (FileBlockParam | TextBlockParam)[] }
+  | { role: 'user'; content: string | (FileBlockParam | TextBlockParam | ToolResultBlockParam)[] }
   | { role: 'assistant'; content: AssistantBlockParam[] }
 
 /** 开启联网搜索与边想边搜 */
@@ -177,8 +192,8 @@ export type CreateMessageRequest = {
   system: string
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
-  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
-  safety_check: { level: 'high' }
+  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool | ClientTool)[]
+  safety_check: { level: 'high' | 'low' }
   title?: { enabled: boolean }
 }
 
@@ -195,8 +210,15 @@ export type MessageUsage = {
   cache_read_input_tokens: number
   /** message_start 中为 0，message_delta 中为全轮累计值 */
   output_tokens: number
+  output_tokens_details?: { thinking_tokens?: number; safety_tokens?: number }
   /** 仅当 message_delta 中有对外输出的搜索结果块时出现 */
-  server_tool_use?: { web_search_requests: number; tool_search: number }
+  server_tool_use?: {
+    web_search_requests?: number
+    tool_search?: number
+    web_fetch_requests?: number
+    tool_fetch?: number
+    tool_image_search?: number
+  }
 }
 
 /** content_block_start 携带的初始内容块；工具块已是完整内容 */
@@ -214,7 +236,7 @@ export type MessageStreamEvent =
   | {
       type: 'message_start'
       /** id 为不带 msg_ 前缀的 UUID，等于响应头 x-ds-request-id */
-      message: { id: string; model: string; usage?: MessageUsage }
+      message: { id: string; model: string; usage?: Partial<MessageUsage> }
     }
   | { type: 'content_block_start'; index: number; content_block: OutputBlockStart }
   | { type: 'content_block_delta'; index: number; delta: ContentBlockDelta }
@@ -228,7 +250,7 @@ export type MessageStreamEvent =
         stop_details?: StopDetails
         title?: string
       }
-      usage?: MessageUsage
+      usage?: Partial<MessageUsage>
     }
   | { type: 'message_stop' }
   | { type: 'ping' }
