@@ -4,17 +4,23 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
+import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
+import android.webkit.MimeTypeMap;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -32,9 +38,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * WebView host for the bundled chat-demo build.
@@ -72,6 +83,29 @@ public class MainActivity extends Activity {
         MIME_TYPES.put("otf", "font/otf");
         MIME_TYPES.put("txt", "text/plain");
         MIME_TYPES.put("xml", "application/xml");
+    }
+
+    /** Extensions the web app lists in its accept attribute; anything else is normalized. */
+    private static final Set<String> IMAGE_EXTS = new HashSet<>(Arrays.asList(
+            "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "svgz", "avif", "apng",
+            "tif", "tiff", "ico", "xbm", "dib", "pjp", "pjpeg", "jfif"));
+
+    static String mimeForName(String name) {
+        String extension = extensionOf(name).toLowerCase(Locale.ROOT);
+        String mime = MIME_TYPES.get(extension);
+        if (mime != null) {
+            return mime;
+        }
+        String guessed = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+        return guessed == null ? "application/octet-stream" : guessed;
+    }
+
+    static String extensionOf(String name) {
+        if (name == null) {
+            return "";
+        }
+        int dot = name.lastIndexOf('.');
+        return dot > 0 && dot < name.length() - 1 ? name.substring(dot + 1) : "";
     }
 
     private WebView web;
@@ -223,12 +257,7 @@ public class MainActivity extends Activity {
             }
             pendingFileCallback = callback;
             try {
-                Intent intent = params.createIntent();
-                intent.addCategory(Intent.CATEGORY_OPENABLE);
-                if (intent.resolveActivity(getPackageManager()) == null) {
-                    intent = fallbackChooserIntent(params);
-                }
-                startActivityForResult(intent, REQUEST_FILE);
+                startActivityForResult(pickerIntent(params), REQUEST_FILE);
                 return true;
             } catch (ActivityNotFoundException error) {
                 pendingFileCallback = null;
@@ -236,21 +265,35 @@ public class MainActivity extends Activity {
             }
         }
 
-        /** Some devices cannot resolve the framework intent; fall back to a plain picker. */
-        private Intent fallbackChooserIntent(FileChooserParams params) {
-            Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        /**
+         * The page accepts a long list of extensions, which the framework cannot express as
+         * MIME filters. Open a permissive picker and let the page validate afterwards.
+         */
+        private Intent pickerIntent(FileChooserParams params) {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
+            List<String> mimes = new ArrayList<>();
             String[] accept = params.getAcceptTypes();
-            if (accept != null && accept.length == 1 && accept[0] != null && !accept[0].isEmpty()) {
-                intent.setType(accept[0]);
+            if (accept != null) {
+                for (String entry : accept) {
+                    if (entry != null && entry.contains("/")) {
+                        mimes.add(entry);
+                    }
+                }
+            }
+            if (mimes.size() == 1) {
+                intent.setType(mimes.get(0));
             } else {
                 intent.setType("*/*");
-                if (accept != null && accept.length > 0) {
-                    intent.putExtra(Intent.EXTRA_MIME_TYPES, accept);
+                if (!mimes.isEmpty()) {
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, mimes.toArray(new String[0]));
                 }
             }
             if (params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            }
+            if (intent.resolveActivity(getPackageManager()) == null) {
+                intent.setAction(Intent.ACTION_GET_CONTENT);
             }
             return intent;
         }
@@ -286,14 +329,20 @@ public class MainActivity extends Activity {
             }
             Uri[] results = null;
             if (resultCode == RESULT_OK && data != null) {
+                List<Uri> picked = new ArrayList<>();
                 if (data.getClipData() != null) {
                     int count = data.getClipData().getItemCount();
-                    results = new Uri[count];
                     for (int index = 0; index < count; index++) {
-                        results[index] = data.getClipData().getItemAt(index).getUri();
+                        Uri item = data.getClipData().getItemAt(index).getUri();
+                        if (item != null) {
+                            picked.add(normalizePickedUri(item));
+                        }
                     }
                 } else if (data.getData() != null) {
-                    results = new Uri[]{data.getData()};
+                    picked.add(normalizePickedUri(data.getData()));
+                }
+                if (!picked.isEmpty()) {
+                    results = picked.toArray(new Uri[0]);
                 }
             }
             pendingFileCallback.onReceiveValue(results);
@@ -301,6 +350,121 @@ public class MainActivity extends Activity {
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    /**
+     * Copies the picked file into the cache and serves it through PickedFileProvider.
+     *
+     * The WebView filters chooser results against the page's accept list. Picker results
+     * often have no extension or an unsupported one (HEIC photos, cloud providers), so they
+     * get dropped without any error. Normalizing here guarantees a matching name and MIME.
+     */
+    private Uri normalizePickedUri(Uri source) {
+        try {
+            ContentResolver resolver = getContentResolver();
+            String mime = resolver.getType(source);
+            if (mime == null) {
+                mime = "";
+            }
+            String displayName = queryDisplayName(source);
+            String extension = extensionOf(displayName).toLowerCase(Locale.ROOT);
+            if (extension.isEmpty()) {
+                String guessed = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime);
+                extension = guessed == null ? "" : guessed.toLowerCase(Locale.ROOT);
+            }
+            boolean imageByMime = mime.startsWith("image/");
+            boolean heic = extension.equals("heic") || extension.equals("heif")
+                    || mime.contains("heic") || mime.contains("heif");
+            boolean supportedImage = IMAGE_EXTS.contains(extension);
+            File directory = PickedFileProvider.cacheDir(this);
+            String stamp = System.currentTimeMillis() + "-" + (int) (Math.random() * 1000);
+            File target;
+            if ((imageByMime || supportedImage) && (heic || !supportedImage)) {
+                target = new File(directory, "image-" + stamp + ".jpg");
+                if (!transcodeToJpeg(source, target)) {
+                    return source;
+                }
+            } else {
+                if (extension.isEmpty()) {
+                    extension = "bin";
+                }
+                target = new File(directory, "file-" + stamp + "." + extension);
+                try (InputStream input = resolver.openInputStream(source);
+                     OutputStream output = new FileOutputStream(target)) {
+                    if (input == null) {
+                        return source;
+                    }
+                    copy(input, output);
+                }
+            }
+            return Uri.parse("content://" + PickedFileProvider.AUTHORITY + "/" + target.getName());
+        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            Log.w(TAG, "Cannot normalize picked file", error);
+            return source;
+        }
+    }
+
+    /** Re-encodes an unsupported image (for example HEIC) as a JPEG the page accepts. */
+    private boolean transcodeToJpeg(Uri source, File target) {
+        ContentResolver resolver = getContentResolver();
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            try (InputStream input = resolver.openInputStream(source)) {
+                BitmapFactory.decodeStream(input, null, bounds);
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                return false;
+            }
+            int sample = 1;
+            while (Math.max(bounds.outWidth, bounds.outHeight) / sample > 4096) {
+                sample *= 2;
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = sample;
+            Bitmap bitmap;
+            try (InputStream input = resolver.openInputStream(source)) {
+                bitmap = BitmapFactory.decodeStream(input, null, options);
+            }
+            if (bitmap == null) {
+                return false;
+            }
+            try (FileOutputStream output = new FileOutputStream(target)) {
+                return bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output);
+            } finally {
+                bitmap.recycle();
+            }
+        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            Log.w(TAG, "Cannot transcode picked image", error);
+            return false;
+        }
+    }
+
+    private String queryDisplayName(Uri source) {
+        try (Cursor cursor = getContentResolver().query(
+                source, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (index >= 0) {
+                    String name = cursor.getString(index);
+                    if (name != null && !name.isEmpty()) {
+                        return name;
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // Fall through to the URI segment below.
+        }
+        String segment = source.getLastPathSegment();
+        return segment == null ? "" : segment;
+    }
+
+    private static void copy(InputStream input, OutputStream output) throws IOException {
+        byte[] buffer = new byte[64 * 1024];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
     }
 
     @Override

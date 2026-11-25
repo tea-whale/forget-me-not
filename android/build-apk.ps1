@@ -13,8 +13,8 @@ $Platform = 'android-35'
 $BuildTools = Join-Path $Sdk "build-tools\$BuildToolsVersion"
 $AndroidJar = Join-Path $Sdk "platforms\$Platform\android.jar"
 $Keystore = [IO.Path]::GetFullPath((Join-Path $Sdk '..\debug.keystore'))
-$VersionName = '1.1.3'
-$VersionCode = '5'
+$VersionName = '1.1.4'
+$VersionCode = '6'
 $MinSdk = '26'
 $TargetSdk = '34'
 
@@ -63,7 +63,8 @@ Invoke-Step 'Link resources (aapt2 link)' {
 }
 
 $GenJava = Get-ChildItem (Join-Path $Build 'gen') -Recurse -Filter *.java | ForEach-Object FullName
-$Sources = @($GenJava) + @((Join-Path $Project 'src\com\teawhale\chatdemo\MainActivity.java'))
+$AppJava = Get-ChildItem (Join-Path $Project 'src') -Recurse -Filter *.java | ForEach-Object FullName
+$Sources = @($GenJava) + @($AppJava)
 
 Invoke-Step 'Compile Java (javac)' {
   New-Item -ItemType Directory -Path (Join-Path $Build 'classes') -Force | Out-Null

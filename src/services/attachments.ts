@@ -48,7 +48,12 @@ const getMaxSizeMB = (file: File) =>
 
 /** 添加前校验：格式 → 大小 → 数量，任一不满足即整批不添加 */
 export const validateFiles = (files: File[], currentCount: number): TranslationMessage | null => {
-  if (files.some((file) => !isAcceptedExt(file.name))) {
+  // 相册/网盘返回的文件名可能没有扩展名，图片按 MIME 兜底放行。
+  if (
+    files.some(
+      (file) => !isAcceptedExt(file.name) && !file.type.startsWith('image/')
+    )
+  ) {
     return { key: 'uploadUnsupportedFormat' }
   }
   const oversized = files.find((file) => file.size > getMaxSizeMB(file) * 1024 * 1024)
