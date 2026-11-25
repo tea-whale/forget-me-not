@@ -91,7 +91,9 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
+        // The file chooser hands back content:// URIs; blocking content access makes
+        // <input type="file"> silently produce empty reads, so uploads fail.
+        settings.setAllowContentAccess(true);
         settings.setSupportZoom(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
@@ -223,12 +225,34 @@ public class MainActivity extends Activity {
             try {
                 Intent intent = params.createIntent();
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
+                if (intent.resolveActivity(getPackageManager()) == null) {
+                    intent = fallbackChooserIntent(params);
+                }
                 startActivityForResult(intent, REQUEST_FILE);
                 return true;
             } catch (ActivityNotFoundException error) {
                 pendingFileCallback = null;
                 return false;
             }
+        }
+
+        /** Some devices cannot resolve the framework intent; fall back to a plain picker. */
+        private Intent fallbackChooserIntent(FileChooserParams params) {
+            Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            String[] accept = params.getAcceptTypes();
+            if (accept != null && accept.length == 1 && accept[0] != null && !accept[0].isEmpty()) {
+                intent.setType(accept[0]);
+            } else {
+                intent.setType("*/*");
+                if (accept != null && accept.length > 0) {
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, accept);
+                }
+            }
+            if (params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            }
+            return intent;
         }
 
         @Override
