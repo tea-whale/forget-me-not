@@ -3,8 +3,10 @@ package com.teawhale.chatdemo;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
+import android.provider.OpenableColumns;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -36,12 +38,15 @@ public class PickedFileProvider extends ContentProvider {
         return true;
     }
 
-    @Override
-    public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+    private File fileFor(Uri uri) {
         String name = new File(uri.getLastPathSegment() == null ? "" : uri.getLastPathSegment())
                 .getName();
-        File file = new File(cacheDir(getContext()), name);
-        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+        return new File(cacheDir(getContext()), name);
+    }
+
+    @Override
+    public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+        return ParcelFileDescriptor.open(fileFor(uri), ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
     @Override
@@ -53,7 +58,23 @@ public class PickedFileProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
                         String sortOrder) {
-        return null;
+        File file = fileFor(uri);
+        String[] columns = projection != null && projection.length > 0
+                ? projection
+                : new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE};
+        MatrixCursor cursor = new MatrixCursor(columns);
+        Object[] row = new Object[columns.length];
+        for (int index = 0; index < columns.length; index++) {
+            if (OpenableColumns.DISPLAY_NAME.equals(columns[index])) {
+                row[index] = file.getName();
+            } else if (OpenableColumns.SIZE.equals(columns[index])) {
+                row[index] = file.length();
+            } else {
+                row[index] = null;
+            }
+        }
+        cursor.addRow(row);
+        return cursor;
     }
 
     @Override

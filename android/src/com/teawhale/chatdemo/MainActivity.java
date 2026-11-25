@@ -377,10 +377,15 @@ public class MainActivity extends Activity {
                     || mime.contains("heic") || mime.contains("heif");
             boolean supportedImage = IMAGE_EXTS.contains(extension);
             File directory = PickedFileProvider.cacheDir(this);
-            String stamp = System.currentTimeMillis() + "-" + (int) (Math.random() * 1000);
+            String stamp = Long.toString(System.currentTimeMillis(), 36)
+                    + Integer.toString((int) (Math.random() * 1296), 36);
+            String base = baseNameOf(displayName);
+            if (base.isEmpty()) {
+                base = imageByMime || supportedImage ? "image" : "file";
+            }
             File target;
             if ((imageByMime || supportedImage) && (heic || !supportedImage)) {
-                target = new File(directory, "image-" + stamp + ".jpg");
+                target = new File(directory, base + "-" + stamp + ".jpg");
                 if (!transcodeToJpeg(source, target)) {
                     return source;
                 }
@@ -388,7 +393,7 @@ public class MainActivity extends Activity {
                 if (extension.isEmpty()) {
                     extension = "bin";
                 }
-                target = new File(directory, "file-" + stamp + "." + extension);
+                target = new File(directory, base + "-" + stamp + "." + extension);
                 try (InputStream input = resolver.openInputStream(source);
                      OutputStream output = new FileOutputStream(target)) {
                     if (input == null) {
@@ -396,6 +401,12 @@ public class MainActivity extends Activity {
                     }
                     copy(input, output);
                 }
+            }
+            if (target.length() <= 0) {
+                // An empty copy would make the page show a broken attachment.
+                //noinspection ResultOfMethodCallIgnored
+                target.delete();
+                return source;
             }
             return Uri.parse("content://" + PickedFileProvider.AUTHORITY + "/" + target.getName());
         } catch (IOException | RuntimeException | OutOfMemoryError error) {
@@ -465,6 +476,20 @@ public class MainActivity extends Activity {
         while ((read = input.read(buffer)) != -1) {
             output.write(buffer, 0, read);
         }
+    }
+
+    /** File name without extension, limited to characters that are safe in a URI segment. */
+    private static String baseNameOf(String name) {
+        String base = name == null ? "" : name;
+        int dot = base.lastIndexOf('.');
+        if (dot > 0) {
+            base = base.substring(0, dot);
+        }
+        base = base.replaceAll("[^\\p{L}\\p{N}_-]", "_");
+        if (base.length() > 60) {
+            base = base.substring(0, 60);
+        }
+        return base;
     }
 
     @Override
