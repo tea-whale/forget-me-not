@@ -108,6 +108,7 @@ const SettingsContent = ({
               <LocaleSetting />
               <TtsVoiceSetting />
               <LocationSetting />
+              <VersionInfo />
             </>
           ) : section === 'memory' ? (
             <MemorySettings />
@@ -213,6 +214,14 @@ const useHistoryDelete = () => {
     },
     confirm,
   }
+}
+
+/** 显示构建版本，便于确认手机上运行的是哪一个安装包。 */
+const VersionInfo = () => {
+  const t = useTranslate()
+  const version =
+    document.querySelector('meta[name="application-version"]')?.getAttribute('content') ?? ''
+  return version ? <p className={styles.version}>{t('versionLabel', { version })}</p> : null
 }
 
 const LocationSetting = () => {

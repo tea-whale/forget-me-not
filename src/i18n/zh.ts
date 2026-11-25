@@ -171,6 +171,7 @@ export const zh = {
   ttsUnavailable: '这条回答暂时无法朗读',
   ttsFailed: '朗读失败，请稍后再试',
   retry: '重试',
+  versionLabel: '版本 {version}',
   latestReminderLanguage: '中文',
   settingsLocaleZhCN: '简体中文',
   settingsLocaleEnUS: 'English',

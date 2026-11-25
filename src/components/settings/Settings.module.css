@@ -211,6 +211,14 @@
   margin-top: 10px;
 }
 
+.version {
+  margin: 16px 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+  user-select: text;
+}
+
 .themeOptions {
   display: flex;
   flex-wrap: wrap;

@@ -140,9 +140,23 @@ public class MainActivity extends Activity {
                 enqueueSystemDownload(url, contentDisposition, mime));
         setContentView(view);
         if (savedInstanceState == null) {
-            view.loadUrl(START_URL);
+            view.loadUrl(startUrl());
         } else {
             view.restoreState(savedInstanceState);
+        }
+    }
+
+    /**
+     * Adds the APK version to the entry URL so a freshly installed build cannot be served
+     * from a WebView cache populated by the previous version.
+     */
+    private String startUrl() {
+        try {
+            String version = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0).versionName;
+            return START_URL + (START_URL.contains("?") ? "&" : "?") + "v=" + version;
+        } catch (PackageManager.NameNotFoundException error) {
+            return START_URL;
         }
     }
 
@@ -241,7 +255,8 @@ public class MainActivity extends Activity {
     private static Map<String, String> cacheHeaders(String path, String mime) {
         Map<String, String> headers = new HashMap<>();
         boolean entry = path.endsWith(".html");
-        headers.put("Cache-Control", entry ? "no-cache" : "public, max-age=31536000, immutable");
+        headers.put("Cache-Control",
+                entry ? "no-store, no-cache, must-revalidate" : "public, max-age=31536000, immutable");
         headers.put("X-Content-Type-Options", "nosniff");
         return headers;
     }

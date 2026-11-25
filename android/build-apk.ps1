@@ -13,8 +13,8 @@ $Platform = 'android-35'
 $BuildTools = Join-Path $Sdk "build-tools\$BuildToolsVersion"
 $AndroidJar = Join-Path $Sdk "platforms\$Platform\android.jar"
 $Keystore = [IO.Path]::GetFullPath((Join-Path $Sdk '..\debug.keystore'))
-$VersionName = '1.1.5'
-$VersionCode = '7'
+$VersionName = '1.1.6'
+$VersionCode = '8'
 $MinSdk = '26'
 $TargetSdk = '34'
 
