@@ -8,7 +8,7 @@
 
 基于 DeepSeek API 的静态聊天示例。无需应用后端，浏览器直接请求配置的 API 服务。
 
-点击 [在线体验](https://deepseek-ai.github.io/chat-demo/) 即可使用，也可以前往 [Releases](https://github.com/deepseek-ai/deepseek-chat-demo/releases) 下载压缩包，解压后双击 `index.html` 在本地使用，无需安装或构建。首次使用时，请在设置中填写 API Key。
+安卓安装包发布在本仓库的 [Releases](https://github.com/tea-whale/forge-me-not/releases)；上游官方 demo 另有 [在线体验](https://deepseek-ai.github.io/chat-demo/)（不含本 fork 的改动）。本地运行请按下文构建静态产物后打开 `dist/index.html`，或直接 `pnpm dev`。首次使用时，请在设置中填写 API Key。
 
 ## 运行
 
