@@ -44,7 +44,7 @@ Copyright (c) 2026 the fork authors, released under the same MIT License:
     reply;
   - safety_check lowered from "high" to "low";
   - an Android WebView wrapper (android/), brand assets and the
-    "Forge Me Not" application name.
+    "Forget Me Not" application name.
 
 See NOTICE for a short summary. The upstream repository, its protocol notes
 and the DeepSeek API documentation remain the reference for the API

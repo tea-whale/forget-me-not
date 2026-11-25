@@ -13,8 +13,8 @@ $Platform = 'android-35'
 $BuildTools = Join-Path $Sdk "build-tools\$BuildToolsVersion"
 $AndroidJar = Join-Path $Sdk "platforms\$Platform\android.jar"
 $Keystore = [IO.Path]::GetFullPath((Join-Path $Sdk '..\debug.keystore'))
-$VersionName = '1.1.1'
-$VersionCode = '3'
+$VersionName = '1.1.2'
+$VersionCode = '4'
 $MinSdk = '26'
 $TargetSdk = '34'
 
@@ -135,7 +135,7 @@ Invoke-Step 'Align (zipalign)' {
   & zipalign.exe -f -p 4 (Join-Path $Build 'app-unsigned.apk') (Join-Path $Build 'app-aligned.apk')
 }
 
-$FinalApk = Join-Path $Build "ForgeMeNot-$VersionName.apk"
+$FinalApk = Join-Path $Build "ForgetMeNot-$VersionName.apk"
 Invoke-Step 'Sign (apksigner)' {
   & apksigner.bat sign `
     --ks $Keystore `

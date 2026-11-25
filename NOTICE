@@ -15,7 +15,7 @@ Modifications in this fork, Copyright (c) 2026 the fork authors, MIT License:
   - per-reply token and prompt-cache usage display;
   - configurable assistant avatar on the welcome screen and every reply;
   - safety_check level lowered from "high" to "low";
-  - Android WebView wrapper (android/), brand assets and the "Forge Me Not"
+  - Android WebView wrapper (android/), brand assets and the "Forget Me Not"
     application name.
 
 DeepSeek, the DeepSeek logo and the DeepSeek API are provided by DeepSeek.
