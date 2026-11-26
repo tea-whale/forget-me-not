@@ -13,11 +13,11 @@
 | 会话工作区 | `D:\Testdsh` |
 | 仓库根目录 | `D:\Testdsh\chat-demo`（在 Workspace 内，可直接读写） |
 | 分支 | `feat/memory-rag-usage`（与 `main` 同步） |
-| 当前提交 | `990afdb fix(android): accept image/* and sniff real image format; add diagnostics panel` |
-| 版本 | `package.json` → `1.1.7`，`android/build-apk.ps1` → `$VersionCode = '9'` |
+| 当前提交 | `990afdb fix(android): accept image/* and sniff real image format; add diagnostics panel` + 本地未提交改动（1.1.9） |
+| 版本 | `package.json` → `1.1.9`，`android/build-apk.ps1` → `$VersionCode = '11'` |
 | 远程 | `origin` = https://github.com/tea-whale/forget-me-not.git ，`upstream` = deepseek-ai/chat-demo |
 | 线上包 | https://github.com/tea-whale/forget-me-not/releases/tag/v1.1.7 |
-| 桌面 APK | `C:\Users\Windows\OneDrive\Desktop\Forget Me Not v1.1.7.apk`（桌面被 OneDrive 接管） |
+| 桌面 APK | `C:\Users\Windows\OneDrive\Desktop\Forget Me Not v1.1.9.apk`（桌面被 OneDrive 接管；1.1.8/1.1.9 尚未发布） |
 
 不在工作区里、但构建要用到的：
 
@@ -67,7 +67,9 @@ src/
     attachments.ts            附件校验、上传队列、失败文案
     api/client.ts             fetch 封装（request / uploadFile / 流式）、失败写诊断日志
     api/types.ts              Anthropic 兼容协议类型（含 deepseek_web_search 等 server tool）
-    chat/store.ts             会话状态机，SYSTEM_PROMPT、SAFETY_CHECK、记忆注入、请求组装
+    chat/store.ts             会话状态机、SAFETY_CHECK、记忆注入、请求组装
+    chat/capabilities.ts      系统提示词与 server tool 声明（搜索开关同步）
+    nativeFiles.ts            安卓原生选文件：取同源字节 → 构造 File → 交给附件校验/上传
     chat/db.ts / drafts.ts    IndexedDB 附件与会话存储、草稿
     memory/*                  长期记忆（IndexedDB `chat-demo-memory` v1）、检索、工具调用
     diagnostics.ts            内存诊断日志（最近 120 条）
@@ -90,14 +92,17 @@ tools/brand-assets.py          生成图标与默认头像
   直接从 APK 的 `assets/app/` 读；用 https origin 是为了 IndexedDB / fetch / CORS 表现和浏览器一致。
 - 入口 URL 带 `?v=<versionName>`，`index.html` 响应头 `Cache-Control: no-store`，避免旧页面被 WebView 缓存。
 - `WebSettings`：`setAllowFileAccess(false)`、`setAllowContentAccess(true)`、DOM storage 开。
-- 文件选择链路（**当前出问题的地方**）：
-  1. 页面 `<input type=file accept=".png,.jpg,...,image/*">` → `onShowFileChooser`
-  2. `pickerIntent()` 用 `ACTION_OPEN_DOCUMENT`；accept 里**带 `*` 的通配类型不参与选择器过滤**
-     （否则聊天框的附件按钮会变成只能选图片）
-  3. `onActivityResult` → `normalizePickedUri()`：把选中项复制进 `cacheDir/picked/`，
-     用 `sniffImageExt()` 读文件头判断真实格式（jpg/png/gif/webp 原样留用，其余转 JPEG），
-     最后返回 `content://com.teawhale.chatdemo.picked/<文件名>`
-  4. `PickedFileProvider` 提供 `openFile` / `getType` / `query`（`DISPLAY_NAME`、`SIZE`）
+- 文件选择链路（1.1.8 起聊天框改走原生读取）：
+  1. 聊天框附件按钮 → `NativeFiles.pick(requestId)`（`@JavascriptInterface`）；桌面浏览器仍用 `<input type=file>`
+  2. Java 起 `ACTION_OPEN_DOCUMENT`（`*/*`，可多选）→ `receiveNativeFiles()` 在单线程池里读字节：
+     上限 64 MB，按文件头判断图片；图片统一经 `normalizePickedImage()` 重编码
+     （无透明→JPEG q92，有透明→PNG，长边 >4096 先降采样），保证 WebView 一定解得开
+  3. 文件放 `cacheDir/picked/`，用随机 token 登记，回传
+     `https://appassets.androidplatform.net/_picked/<token>`
+  4. `nativeFiles.ts` fetch 该地址（`shouldInterceptRequest` 校验 token 后返回文件，读一次即删），
+     校验字节数一致再构造 `File`，之后完全走 Web 校验和 Files API 上传
+  5. 头像等 `<input accept="image/*">` 仍走旧链路：`onShowFileChooser` → `normalizePickedUri()`
+     → `PickedFileProvider`（保留，未删）
 - 下载（导出会话、备份记忆）走 `DownloadBridge`（`@JavascriptInterface`，分块 base64）。
 
 ---
@@ -105,21 +110,27 @@ tools/brand-assets.py          生成图标与默认头像
 ## 5. 附件链路（Web 侧，按顺序）
 
 ```
-<input type=file> onChange
+聊天框按钮
+  → 安卓：NativeFiles.pick → 原生内容 → 同源 /_picked/<token> → File
+    桌面：继续 <input type=file> onChange
   → ChatInput.acceptFiles()            是否需要 API Key；空列表直接 return（静默）
   → drafts.addDraftFiles()
       → attachments.validateFiles()    扩展名（或 image/* 兜底）→ 大小 → 数量
       → 生成 DraftAttachment{id, file}，草稿里直接持有 File（预览就是 URL.createObjectURL(file)）
       → uploadAttachment()             → 内存队列，最多 3 并发
   → api/client.uploadFile()
-      → 图片：resizeUploadImage(file)  用 Image 解码，长边 >4096 才缩放（解码失败会直接抛）
+      → 图片：resizeUploadImage(file)  用 Image 解码，长边 >4096 才缩放；
+        解码失败不再中止，改为原样上传（记 `本机无法解码，改为原样上传 …`）
       → POST https://api.deepseek.com/anthropic/v1/files
         multipart/form-data，头 x-api-key + anthropic-beta: files-api-2025-04-14
       → 拿到 file_id
   → 发送时 content 里引用 file_id
 ```
 
-失败会在卡片上显示「上传失败 / 可重试」，并写一条诊断日志。
+失败会在卡片上显示「上传失败 / 可重试」，并写一条诊断日志。1.1.8 起 `uploadFile()` 会先记
+`准备上传 …`；1.1.9 起原生读取会记 `原生文件已读取 … 头部 <前 12 字节>`，
+解码失败记 `本机无法解码，改为原样上传 …`，读取失败记 `选择附件失败 …`/`读取附件失败 …`，
+所以「日志为空」这条歧义路径已经补上。
 
 ---
 
@@ -135,58 +146,66 @@ tools/brand-assets.py          生成图标与默认头像
 有「测试上传」（真传一张 8×8 PNG，验证 Files API）、「复制全部」、「清空」。
 手机上装不了开发者工具，这个面板是唯一能拿到失败原因的通道。
 
-**重要**：不是所有失败都会留下日志。下面这条路径完全不写日志：
-文件在 WebView 里读不出来 → `resizeUploadImage` 的 `image.decode()` 抛错 → 请求根本没发出。
-所以「卡片上显示上传失败，但诊断日志空的」，基本可以判定为**文件内容/读取有问题，而不是网络或接口问题**。
+**重要**：1.1.7 及以前有一条路径完全不写日志——文件在 WebView 里读不出来 →
+`resizeUploadImage` 的 `image.decode()` 抛错 → 请求根本没发出。1.1.8 已给这一层补上日志
+（`准备上传 …` / `读取或处理附件失败 …` / `原生文件已读取 …` / `选择附件失败 …`），
+所以现在「卡片显示上传失败且日志为空」基本不应再出现；真遇到请先确认版本号。
 
 ---
 
 ## 7. 已知问题与已经试过的东西
 
-### 7.1 聊天框发不了图片（未解决）
+### 7.1 聊天框发不了图片（1.1.9 已改原生链路 + 统一重编码，待真机复测）
 
-现象：在手机上点附件按钮、选一张照片，没有正常上传；早期截图里附件卡片缩略图是坏的 + 重试图标；
-诊断日志里没有任何记录（最近反馈）。
+现象（1.1.7 及以前）：在手机上点附件按钮、选一张照片，没有正常上传；附件卡片缩略图坏 + 重试图标；
+诊断日志里没有任何记录。
 
-已经改动过的（都在当前代码里）：
+1.1.7 及以前试过但没根治的：`setAllowContentAccess(true)`、`PickedFileProvider` 的
+`query()`/文件名规范化、`normalizePickedUri` 落盘 + 文件头嗅探 + HEIC→JPEG、accept 追加
+`image/*`、版本徽标与 `?v=` 破缓存。结论：只要还依赖 WebView 的 file chooser +
+`content://`，就会受 accept 过滤、URI 权限、provider 三重变量影响，失败还可能完全静默。
 
-1. `setAllowContentAccess(true)`——保留，但不是根因。
-2. 新增 `PickedFileProvider` + `query()`（`DISPLAY_NAME`/`SIZE`）+ 文件名规范化，防止页面拿到空文件。
-3. `normalizePickedUri` 改为先落盘再按文件头判断格式，HEIC 等转 JPEG。
-4. 页面 accept 列表追加 `image/*`：WebView 会拿选择结果和 accept 比对，不匹配会**静默丢弃**，
-   而安卓相册常给出 `image/heic` 这类不在扩展名白名单里的类型；`validateFiles()` 同步允许
-   `image/*` 的 MIME 兜底。
-5. 版本徽标、`?v=` 参数、`no-store`，排除装错包 / 旧页面缓存。
+**1.1.8（原生读取）**：聊天框附件按钮不再触发 `<input type=file>`，改成
+`NativeFiles.pick(requestId)` → Java `ACTION_OPEN_DOCUMENT` → 单线程池读字节 →
+`https://appassets.androidplatform.net/_picked/<token>` → 页面 fetch 成 `File`。
+一次性甩掉 accept 过滤、content:// 权限、provider 三个变量；头像那条 `<input>` 链路原样保留。
 
-**10 秒分流（最有价值的一步）**：在同一个 App 里用**同一张相册照片**做两件事——
+**1.1.9（真机复测后的补丁）**：1.1.8 实测已经能读到原生文件（日志
+`原生文件已读取 … 497547B`），但页面 `image.decode()` 报
+`The source image cannot be decoded`，即「系统读得到字节、WebView 解不了码」，仍拿不到图。
+所以：
 
-- 点首页头像换图（`<input accept="image/*">`，不走 Files API，只做 canvas 解码）
-- 点聊天框附件按钮选图（`accept` 里是扩展名 + `image/*`，要走 Files API）
+- Java 侧 `normalizePickedImage()` 不再只对 HEIC 转码，**所有图片都经 BitmapFactory 重编码**
+  （无透明 → JPEG q92，有透明 → PNG，长边 >4096 先降采样），页面拿到的必定是标准格式；
+  系统也解不出时才退回原字节。
+- Web 侧 `uploadFile()` 在解码失败时改为**原样上传**（只记 `本机无法解码，改为原样上传 …`），
+  不再让本地解码失败阻断整个上传。
+- 诊断日志追加文件头 12 字节（`头部 ff d8 ff e0 …`），便于判断「后缀是 jpg、内容不是」。
 
-头像能换、附件不行 → 卡在 accept 过滤 / 上传请求；两个都不行 → 卡在文件读取（provider / WebView）。
-这个结论直接决定往哪边走，比继续盲改代码有用。
+验证状态：类型检查、oxlint、rspack 构建、APK 编译签名均通过；**1.1.9 尚未在真机上复测**。
+真机若仍失败，日志应能明确区分：原生读取失败（`选择附件失败 …` / `读取附件失败 …`）、
+原生读取成功（`原生文件已读取 … 头部 …`）、解码失败（`本机无法解码，改为原样上传 …`）、
+接口失败（`HTTP …` / `网络失败 …`）。
 
-**下一个排查者请注意**：先确认手机上跑的是哪个版本（设置 → 通用 底部「版本 x.y.z」），
-这一步能排掉一半可能。然后两条路：
+### 7.2 联网搜索不可用（1.1.8 已补提示词，待真机确认）
 
-- A. 有电脑能连 USB：`adb logcat -s ChatDemo` 看 `Cannot normalize picked file` /
-  `Cannot transcode picked image` 这类 Java 日志，以及选完文件后 WebView 有没有读到。
-- B. 彻底绕开 WebView 的 file chooser：给页面加一个 `@JavascriptInterface`，
-  附件按钮点下去走原生选文件，Java 直接把字节读出来（base64 或写进一个可 fetch 的
-  自定义 scheme），再 `evaluateJavascript` 造一个 `File` 塞给页面。
-  这条路能一次性甩掉 accept 过滤、content:// 权限、provider 三个变量，建议优先考虑。
+搜索是**同一个 `/anthropic/v1/messages` 请求**里的 server tool，工具名与请求格式对照官方文档
+（https://api-docs.deepseek.com/guides/web_tools ）是正确的，安卓壳子与本功能无关。
 
-### 7.2 联网搜索不可用（未解决）
+1.1.7 的问题在于：工具虽然声明了，但 `system` 只有一句身份说明，模型没有被要求联网，
+于是倾向凭训练知识回答（看起来就是「不会搜索」）。
 
-搜索是**同一个 `/anthropic/v1/messages` 请求**里的 server tool：
-`store.ts` 的 `serverTools(search)` 会追加 `{ type: 'deepseek_web_search' }`。
-所以它不涉及安卓壳子，也不涉及任何新接口。
+1.1.8：`chat/capabilities.ts` 把「系统提示词 + 工具声明」放在一处，按每轮实际搜索开关生成：
+开启时明确要求碰到「明确要搜索/查最新/核实」时必须用工具、引用真实来源、不编造链接，
+并要求如实说明工具失败；关闭时明确告知不能搜索、提示用户开启，避免模型假装已搜。
+`systems` 文案与 `deepseek_web_search` 声明永远同一份快照，续写/记忆工具回合不会漂移。
 
-排查建议：拿同一个 API Key 在桌面浏览器打开 `dist/` 的构建（或线上 Pages/本地 `node` 静态服务），
-打开「智能搜索」问一个需要搜索的问题：
+注意：`tool_choice` 不能强制点名 `deepseek_web_search`（会 400），搜索与否始终由模型决定；
+提示词只能提高触发率，无法 100% 保证每次都搜。
 
-- 桌面也一样不搜索 → 是 Key / 账号能力或上游限流的问题，跟打包无关；
-- 桌面正常、手机上不正常 → 再看手机上的诊断日志（会有 `HTTP`/`网络失败` 记录）和模型选择。
+排查建议（真机仍不搜时）：同一个 API Key 在桌面浏览器问一个需要搜索的问题，
+桌面也不搜 → Key/账号能力或上游限流，与打包无关；桌面正常、手机不正常 → 看诊断日志里的
+`HTTP`/`网络失败` 记录。
 
 ---
 

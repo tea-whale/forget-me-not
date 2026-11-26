@@ -4,7 +4,7 @@ import { createId } from '../../utils/id.js'
 import { ApiError } from '../api/client.js'
 import { buildMemoryContext } from '../memory/context.js'
 import { streamMemoryMessage } from '../memory/stream.js'
-import type { ChatModel, CreateMessageRequest } from '../api/types.js'
+import type { ChatModel } from '../api/types.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import {
   cancelUpload,
@@ -24,6 +24,7 @@ import {
   prepareDraftMessage,
 } from './drafts.js'
 import { createLatestReminder } from './latestReminder.js'
+import { chatCapabilities } from './capabilities.js'
 import {
   applyEvent,
   canContinueReply,
@@ -43,8 +44,6 @@ import {
 
 /** deepseek-flash 同时支持深度思考与图片输入 */
 const MODEL: ChatModel = 'deepseek-flash'
-/** 所有生成请求统一携带的助手身份说明 */
-const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
 /** 安全审核固定开启，所有请求都走扩展模式 */
@@ -54,17 +53,6 @@ const SAFETY_CHECK = { level: 'low' } as const
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
 const FILE_RETRY_BASE_DELAY = 1000
-
-/** 阅读链接始终开启，智能搜索开关控制是否另行声明搜索工具（含边想边搜）。 */
-const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
-  const tools: CreateMessageRequest['tools'] = [
-    { type: 'deepseek_read_url', name: 'deepseek_read_url' },
-  ]
-  if (search) {
-    tools.push({ type: 'deepseek_web_search', name: 'deepseek_web_search' })
-  }
-  return tools
-}
 
 /** 允许自动补标题的请求；手动重命名后取消本轮标题写入，包含主动清空标题的情况。 */
 const titleRequests = new Set<AbortController>()
@@ -1046,15 +1034,16 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           const questionIndex = messages.findLastIndex((message) => message.role === 'user')
           messages.splice(questionIndex, 0, { role: 'latest_reminder', content: memory.recall })
         }
+        const capabilities = chatCapabilities(initial.search ?? false)
         const events = streamMemoryMessage(
           useSettings.getState().apiKey ?? '',
           {
             model: initial.model ?? MODEL,
-            system: [SYSTEM_PROMPT, memory?.system].filter(Boolean).join('\n\n'),
+            system: [capabilities.system, memory?.system].filter(Boolean).join('\n\n'),
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
             safety_check: SAFETY_CHECK,
-            tools: serverTools(initial.search ?? false),
+            tools: capabilities.tools,
             ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
           },
           controller.signal,

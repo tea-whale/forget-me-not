@@ -27,6 +27,8 @@ import { ensureApiKey } from '../settings/settingsDialogState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
+import { pickNativeFiles } from '../../services/nativeFiles.js'
+import { diag } from '../../services/diagnostics.js'
 import { DraftAttachments } from './DraftAttachments.js'
 import { useVoiceInput } from './useVoiceInput.js'
 import { VoiceButton } from './VoiceButton.js'
@@ -81,6 +83,22 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     const error = addDraftFiles(sessionId, files, useSettings.getState().apiKey ?? '')
     if (error) {
       showToast(error)
+    }
+  }
+  const chooseFiles = async () => {
+    if (useChatStore.getState().importingHistory || !ensureApiKey()) {
+      return
+    }
+    try {
+      const picked = pickNativeFiles()
+      if (picked) {
+        acceptFiles(await picked)
+      } else {
+        fileInputRef.current?.click()
+      }
+    } catch (error) {
+      diag(`选择附件失败 → ${error instanceof Error ? error.message : String(error)}`)
+      showToast({ key: 'uploadFileStatusFailed', type: 'error' })
     }
   }
   const retryFile = useCallback(
@@ -247,7 +265,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             icon={<IconPaperclipOutline16 />}
             tooltip={t('uploadFile')}
             disabled={importingHistory}
-            onClick={() => ensureApiKey() && fileInputRef.current?.click()}
+            onClick={() => void chooseFiles()}
           />
           <input
             ref={fileInputRef}

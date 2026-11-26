@@ -115,15 +115,34 @@ export const uploadFile = async (
   purpose: FilePurpose | null,
   signal?: AbortSignal
 ): Promise<FileObject> => {
+  diag(`准备上传 ${file.name} ${file.type || '未知类型'} ${file.size}B`)
+  if (file.size === 0) {
+    const empty = new Error('所选文件为空，请重新选择')
+    diag(`读取或处理附件失败 ${file.name} → ${empty.message}`)
+    throw empty
+  }
+  let payload: File = file
+  if (purpose === null) {
+    try {
+      payload = await resizeUploadImage(file, signal)
+    } catch (error) {
+      if (signal?.aborted) {
+        throw error
+      }
+      // WebView 偶发解不出的图片（JPEG 头信息异常、相机 RAW 等）不再中止上传：
+      // 原样把字节交给服务端，由服务端决定能否解析，至少不会卡在本地。
+      diag(
+        `本机无法解码，改为原样上传 ${file.name} → ${error instanceof Error ? error.message : String(error)}`
+      )
+      payload = file
+    }
+  }
   const form = new FormData()
   if (purpose) {
     form.append('purpose', purpose)
   }
-  form.append('file', purpose === null ? await resizeUploadImage(file, signal) : file)
-  const payload = form.get('file')
-  if (payload instanceof File) {
-    diag(`上传 ${payload.name} ${payload.type || '未知类型'} ${Math.round(payload.size / 1024)}KB`)
-  }
+  form.append('file', payload)
+  diag(`上传 ${payload.name} ${payload.type || '未知类型'} ${Math.round(payload.size / 1024)}KB`)
   const response = await request(`${ANTHROPIC_BASE_URL}/files`, {
     method: 'POST',
     headers: anthropicHeaders(apiKey, true),

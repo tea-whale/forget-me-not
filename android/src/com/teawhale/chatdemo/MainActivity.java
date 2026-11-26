@@ -35,6 +35,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -47,6 +48,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * WebView host for the bundled chat-demo build.
@@ -115,6 +124,11 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private ValueCallback<Uri[]> pendingFileCallback;
+    private String pendingNativeRequest;
+    private final ExecutorService fileWorker = Executors.newSingleThreadExecutor();
+    private final Map<String, File> pickedFiles = new ConcurrentHashMap<>();
+    private static final String PICKED_PATH = "/_picked/";
+    private static final long MAX_PICKED_BYTES = 64L * 1024 * 1024;
     private PermissionRequest pendingMicRequest;
     private OutputStream downloadStream;
     private String downloadLabel;
@@ -141,6 +155,7 @@ public class MainActivity extends Activity {
         view.setWebViewClient(new AssetClient());
         view.setWebChromeClient(new ChromeClient());
         view.addJavascriptInterface(new DownloadBridge(), "NativeDownload");
+        view.addJavascriptInterface(new NativeFilesBridge(), "NativeFiles");
         view.setDownloadListener((url, userAgent, contentDisposition, mime, contentLength) ->
                 enqueueSystemDownload(url, contentDisposition, mime));
         setContentView(view);
@@ -193,6 +208,9 @@ public class MainActivity extends Activity {
                 return null; // API calls and other hosts go to the network.
             }
             String path = url.getPath();
+            if (path != null && path.startsWith(PICKED_PATH)) {
+                return pickedFileResponse(path);
+            }
             if (path == null || "/".equals(path)) {
                 path = "/index.html";
             }
@@ -266,12 +284,214 @@ public class MainActivity extends Activity {
         return headers;
     }
 
+    /** Only random tokens registered by the picker can be served, never arbitrary cache paths. */
+    private WebResourceResponse pickedFileResponse(String path) {
+        String token = path.substring(PICKED_PATH.length());
+        File file = pickedFiles.get(token);
+        if (file != null) {
+            try {
+                InputStream stream = new FilterInputStream(new FileInputStream(file)) {
+                    @Override
+                    public void close() throws IOException {
+                        try {
+                            super.close();
+                        } finally {
+                            pickedFiles.remove(token, file);
+                            file.delete();
+                        }
+                    }
+                };
+                Map<String, String> headers = cacheHeaders("picked.html", "");
+                headers.put("Content-Length", Long.toString(file.length()));
+                return new WebResourceResponse(mimeForName(file.getName()), null, 200, "OK",
+                        headers, stream);
+            } catch (IOException error) {
+                Log.w(TAG, "Cannot serve picked file", error);
+            }
+        }
+        return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
+                cacheHeaders("picked.html", ""), new ByteArrayInputStream(new byte[0]));
+    }
+
+    private final class NativeFilesBridge {
+        @JavascriptInterface
+        public void pick(String requestId) {
+            runOnUiThread(() -> {
+                Uri current = web == null ? null : Uri.parse(web.getUrl() == null ? "" : web.getUrl());
+                if (current == null || !"https".equals(current.getScheme())
+                        || !HOST.equals(current.getHost()) || requestId == null
+                        || requestId.length() > 100) {
+                    return;
+                }
+                if (pendingNativeRequest != null || pendingFileCallback != null) {
+                    deliverNativeFiles(requestId, new JSONArray(), "文件选择器正在使用中");
+                    return;
+                }
+                pendingNativeRequest = requestId;
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                if (intent.resolveActivity(getPackageManager()) == null) {
+                    intent.setAction(Intent.ACTION_GET_CONTENT);
+                }
+                try {
+                    startActivityForResult(intent, REQUEST_FILE);
+                } catch (ActivityNotFoundException error) {
+                    pendingNativeRequest = null;
+                    deliverNativeFiles(requestId, new JSONArray(), "无法打开文件选择器");
+                }
+            });
+        }
+    }
+
+    private void deliverNativeFiles(String requestId, JSONArray files, String error) {
+        try {
+            JSONObject detail = new JSONObject();
+            detail.put("id", requestId);
+            detail.put("files", files);
+            if (error != null) {
+                detail.put("error", error);
+            }
+            String script = "window.dispatchEvent(new CustomEvent('native-files-picked',{detail:"
+                    + detail.toString() + "}));";
+            runOnUiThread(() -> {
+                if (web != null && !isFinishing() && !isDestroyed()) {
+                    web.evaluateJavascript(script, null);
+                }
+            });
+        } catch (JSONException errorBuildingResult) {
+            Log.e(TAG, "Cannot deliver picked files", errorBuildingResult);
+        }
+    }
+
+    private void receiveNativeFiles(String requestId, int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null) {
+            deliverNativeFiles(requestId, new JSONArray(), null);
+            return;
+        }
+        List<Uri> sources = new ArrayList<>();
+        if (data.getClipData() != null) {
+            for (int index = 0; index < data.getClipData().getItemCount(); index++) {
+                Uri source = data.getClipData().getItemAt(index).getUri();
+                if (source != null) {
+                    sources.add(source);
+                }
+            }
+        } else if (data.getData() != null) {
+            sources.add(data.getData());
+        }
+        if (sources.size() > 50) {
+            deliverNativeFiles(requestId, new JSONArray(), "每次最多选择 50 个文件");
+            return;
+        }
+        fileWorker.execute(() -> {
+            JSONArray files = new JSONArray();
+            try {
+                for (Uri source : sources) {
+                    files.put(prepareNativeFile(source));
+                }
+                deliverNativeFiles(requestId, files, null);
+            } catch (IOException | JSONException | RuntimeException | OutOfMemoryError error) {
+                for (int index = 0; index < files.length(); index++) {
+                    JSONObject descriptor = files.optJSONObject(index);
+                    if (descriptor != null) {
+                        String path = Uri.parse(descriptor.optString("url")).getPath();
+                        File file = path == null ? null
+                                : pickedFiles.remove(path.substring(PICKED_PATH.length()));
+                        if (file != null) {
+                            file.delete();
+                        }
+                    }
+                }
+                Log.w(TAG, "Cannot read native picked file", error);
+                deliverNativeFiles(requestId, new JSONArray(), "读取附件失败：" + error.getMessage());
+            }
+        });
+    }
+
+    private JSONObject prepareNativeFile(Uri source) throws IOException, JSONException {
+        String name = sanitize(queryDisplayName(source));
+        String mime = getContentResolver().getType(source);
+        String extension = extensionOf(name).toLowerCase(Locale.ROOT);
+        boolean image = (mime != null && mime.startsWith("image/")) || IMAGE_EXTS.contains(extension)
+                || "heic".equals(extension) || "heif".equals(extension);
+        File directory = PickedFileProvider.cacheDir(this);
+        File target = File.createTempFile("picked-", ".tmp", directory);
+        boolean registered = false;
+        try {
+            try (InputStream input = getContentResolver().openInputStream(source);
+                 OutputStream output = new FileOutputStream(target)) {
+                if (input == null) {
+                    throw new IOException("无法读取所选文件");
+                }
+                byte[] buffer = new byte[64 * 1024];
+                long size = 0;
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    size += count;
+                    if (size > MAX_PICKED_BYTES) {
+                        throw new IOException("单个文件不能超过 64 MB");
+                    }
+                    output.write(buffer, 0, count);
+                }
+            }
+            if (target.length() == 0) {
+                throw new IOException("所选文件为空");
+            }
+            String actual = sniffImageExt(target);
+            image |= !actual.isEmpty();
+            if (image) {
+                // 统一经 BitmapFactory 重编码：系统能解、但 WebView 拒解的 JPEG（异常头信息、
+                // 相机 RAW、HEIC 等）原来会卡在页面的 image.decode()，请求根本发不出去。
+                File normalized = normalizePickedImage(target, directory);
+                if (normalized != null) {
+                    target.delete();
+                    target = normalized;
+                } else {
+                    // 系统也解不出：原样交给页面，页面解码失败后会改为原样上传
+                    String keep = isPageImageExt(actual) ? actual
+                            : (isPageImageExt(extension) ? extension : "jpg");
+                    target = renameInto(target, directory, "image", keep);
+                }
+                actual = extensionOf(target.getName()).toLowerCase(Locale.ROOT);
+                name = baseNameOf(name) + "." + actual;
+                mime = mimeForName(name);
+            } else {
+                if (extension.isEmpty()) {
+                    extension = "bin";
+                }
+                target = renameInto(target, directory, "file", extension);
+                if (mime == null || mime.isEmpty()) {
+                    mime = mimeForName(name);
+                }
+            }
+            String token = UUID.randomUUID().toString();
+            JSONObject descriptor = new JSONObject();
+            descriptor.put("url", "https://" + HOST + PICKED_PATH + token);
+            descriptor.put("name", name);
+            descriptor.put("type", mime);
+            descriptor.put("size", target.length());
+            pickedFiles.put(token, target);
+            registered = true;
+            return descriptor;
+        } finally {
+            if (!registered) {
+                target.delete();
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- web chrome
 
     private final class ChromeClient extends WebChromeClient {
         @Override
         public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
                                          FileChooserParams params) {
+            if (pendingNativeRequest != null) {
+                callback.onReceiveValue(null);
+                return true;
+            }
             if (pendingFileCallback != null) {
                 pendingFileCallback.onReceiveValue(null);
             }
@@ -345,6 +565,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == REQUEST_FILE) {
+            if (pendingNativeRequest != null) {
+                String requestId = pendingNativeRequest;
+                pendingNativeRequest = null;
+                receiveNativeFiles(requestId, resultCode, data);
+                return;
+            }
             if (pendingFileCallback == null) {
                 super.onActivityResult(requestCode, resultCode, data);
                 return;
@@ -426,14 +652,12 @@ public class MainActivity extends Activity {
                         return pickedUri(target);
                     }
                 }
-                File target = new File(directory, base + "-" + stamp + ".jpg");
-                if (transcodeToJpeg(source, target) && target.length() > 0) {
+                File target = normalizePickedImage(copy, directory);
+                if (target != null) {
                     //noinspection ResultOfMethodCallIgnored
                     copy.delete();
                     return pickedUri(target);
                 }
-                //noinspection ResultOfMethodCallIgnored
-                target.delete();
                 //noinspection ResultOfMethodCallIgnored
                 copy.delete();
                 // 转码失败时退回原件：页面 accept 里带了 image/*，原件同样能被接收
@@ -519,17 +743,20 @@ public class MainActivity extends Activity {
         return "";
     }
 
-    /** Re-encodes an unsupported image (for example HEIC) as a JPEG the page accepts. */
-    private boolean transcodeToJpeg(Uri source, File target) {
-        ContentResolver resolver = getContentResolver();
+    /**
+     * 用系统解码器重编码图片，返回带 .jpg/.png 后缀的临时文件，失败时返回 null。
+     *
+     * 有些相册图片 Android 能解、WebView 的 image.decode() 却报 "source image cannot be
+     * decoded"；统一重编码后页面拿到的一定是标准 JPEG/PNG，不会再卡在本地解码。
+     * 带透明通道的图保留 PNG，避免透明区域变黑。
+     */
+    private File normalizePickedImage(File source, File directory) {
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
-            try (InputStream input = resolver.openInputStream(source)) {
-                BitmapFactory.decodeStream(input, null, bounds);
-            }
+            BitmapFactory.decodeFile(source.getAbsolutePath(), bounds);
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                return false;
+                return null;
             }
             int sample = 1;
             while (Math.max(bounds.outWidth, bounds.outHeight) / sample > 4096) {
@@ -537,21 +764,51 @@ public class MainActivity extends Activity {
             }
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inSampleSize = sample;
-            Bitmap bitmap;
-            try (InputStream input = resolver.openInputStream(source)) {
-                bitmap = BitmapFactory.decodeStream(input, null, options);
-            }
+            Bitmap bitmap = BitmapFactory.decodeFile(source.getAbsolutePath(), options);
             if (bitmap == null) {
-                return false;
+                return null;
             }
+            boolean alpha = bitmap.hasAlpha();
+            String extension = alpha ? "png" : "jpg";
+            File target = File.createTempFile("image-", "." + extension, directory);
+            boolean written;
             try (FileOutputStream output = new FileOutputStream(target)) {
-                return bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output);
+                written = bitmap.compress(
+                        alpha ? Bitmap.CompressFormat.PNG : Bitmap.CompressFormat.JPEG, 92, output);
             } finally {
                 bitmap.recycle();
             }
+            if (!written || target.length() == 0) {
+                //noinspection ResultOfMethodCallIgnored
+                target.delete();
+                return null;
+            }
+            return target;
         } catch (IOException | RuntimeException | OutOfMemoryError error) {
-            Log.w(TAG, "Cannot transcode picked image", error);
-            return false;
+            Log.w(TAG, "Cannot normalize picked image", error);
+            return null;
+        }
+    }
+
+    /** 把无后缀的临时文件改成带真实后缀的名字，保证页面拿到的 MIME 正确。 */
+    private static File renameInto(File source, File directory, String prefix, String extension) {
+        try {
+            File target = File.createTempFile(prefix + "-", "." + extension, directory);
+            //noinspection ResultOfMethodCallIgnored
+            target.delete();
+            if (source.renameTo(target)) {
+                return target;
+            }
+            try (InputStream input = new FileInputStream(source);
+                 OutputStream output = new FileOutputStream(target)) {
+                copy(input, output);
+            }
+            //noinspection ResultOfMethodCallIgnored
+            source.delete();
+            return target;
+        } catch (IOException | RuntimeException error) {
+            Log.w(TAG, "Cannot rename picked file", error);
+            return source;
         }
     }
 

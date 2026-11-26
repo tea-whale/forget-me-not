@@ -17,7 +17,7 @@ $Keystore = [IO.Path]::GetFullPath((Join-Path $Sdk '..\debug.keystore'))
 $VersionName = (Get-Content (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json).version
 if (-not $VersionName) { throw 'Cannot read version from package.json' }
 # Android 的 versionCode 必须是整数，每发一版加 1
-$VersionCode = '9'
+$VersionCode = '11'
 $MinSdk = '26'
 $TargetSdk = '34'
 
