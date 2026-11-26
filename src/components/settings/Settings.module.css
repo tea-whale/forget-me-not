@@ -508,3 +508,32 @@
     max-width: 100%;
   }
 }
+
+.diagnosticsDialog {
+  width: min(640px, 92vw);
+  max-height: calc(100vh - 32px);
+}
+
+.diagnosticsLog {
+  width: 100%;
+  min-height: 220px;
+  max-height: 45vh;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  resize: vertical;
+}
+
+.diagnosticsActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}

@@ -1,9 +1,11 @@
 import { avatarEn } from './avatar.js'
+import { diagnosticsEn } from './diagnostics.js'
 import { memoryEn } from './memory.js'
 import type { zh } from './zh.js'
 
 export const en = {
   ...avatarEn,
+  ...diagnosticsEn,
   ...memoryEn,
   welcomeMessageChat250808: 'How can I help you?',
   contentCaveat: 'AI-generated, for reference only',

@@ -36,6 +36,12 @@ import { showToast } from '../base/toastState.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
 import { MemorySettings } from './MemorySettings.js'
+import { uploadFile } from '../../services/api/client.js'
+import {
+  clearDiagnostics,
+  diagnosticsEnvironment,
+  useDiagnostics,
+} from '../../services/diagnostics.js'
 import styles from './Settings.module.css'
 
 /**
@@ -108,6 +114,7 @@ const SettingsContent = ({
               <LocaleSetting />
               <TtsVoiceSetting />
               <LocationSetting />
+              <DiagnosticsSetting />
               <VersionInfo />
             </>
           ) : section === 'memory' ? (
@@ -222,6 +229,109 @@ const VersionInfo = () => {
   const version =
     document.querySelector('meta[name="application-version"]')?.getAttribute('content') ?? ''
   return version ? <p className={styles.version}>{t('versionLabel', { version })}</p> : null
+}
+
+/**
+ * 诊断信息：附件上传失败、接口报错、脚本异常都会记在这里。
+ * 手机上装不了开发者工具，出问题时用户可以直接复制这段文本发过来。
+ */
+const DiagnosticsSetting = () => {
+  const t = useTranslate()
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <SettingCell
+        label={t('diagnosticsTitle')}
+        description={t('diagnosticsDescription')}
+        status={null}
+        action={
+          <Button
+            variant="outlined"
+            size="m"
+            className={styles.cellButton}
+            onClick={() => setOpen(true)}
+          >
+            {t('diagnosticsOpen')}
+          </Button>
+        }
+      />
+      {open ? <DiagnosticsPanel onClose={() => setOpen(false)} /> : null}
+    </>
+  )
+}
+
+/** 生成一张 8×8 的 PNG 当作自检文件，不依赖任何外部资源 */
+const selfCheckImage = async (): Promise<File> => {
+  const canvas = document.createElement('canvas')
+  canvas.width = 8
+  canvas.height = 8
+  const context = canvas.getContext('2d')
+  if (context) {
+    context.fillStyle = '#4d6bfe'
+    context.fillRect(0, 0, 8, 8)
+  }
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+  if (!blob) {
+    throw new Error('Cannot create test image')
+  }
+  return new File([blob], 'selfcheck.png', { type: 'image/png' })
+}
+
+const DiagnosticsPanel = ({ onClose }: { onClose: () => void }) => {
+  const t = useTranslate()
+  const lines = useDiagnostics((state) => state.lines)
+  const apiKey = useSettings((state) => state.apiKey)
+  const [busy, setBusy] = useState(false)
+  const text = `${diagnosticsEnvironment()}\n\n${lines.join('\n') || t('diagnosticsEmpty')}`
+
+  const selfCheck = async () => {
+    if (!apiKey) {
+      showToast({ key: 'diagnosticsNeedKey', type: 'error' })
+      return
+    }
+    setBusy(true)
+    try {
+      await uploadFile(apiKey, await selfCheckImage(), null)
+      showToast({ key: 'diagnosticsSelfCheckOk' })
+    } catch {
+      showToast({ key: 'diagnosticsSelfCheckFailed', type: 'error' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast({ key: 'diagnosticsCopied' })
+    } catch {
+      showToast({ key: 'diagnosticsCopyFailed', type: 'error' })
+    }
+  }
+
+  return (
+    <Modal
+      title={t('diagnosticsTitle')}
+      closable
+      className={styles.diagnosticsDialog}
+      onClose={onClose}
+      footer={
+        <div className={styles.diagnosticsActions}>
+          <Button variant="outlined" size="m" disabled={busy} onClick={() => void selfCheck()}>
+            {t('diagnosticsSelfCheck')}
+          </Button>
+          <Button variant="outlined" size="m" onClick={() => void copy()}>
+            {t('diagnosticsCopy')}
+          </Button>
+          <Button variant="outlined" size="m" onClick={clearDiagnostics}>
+            {t('diagnosticsClear')}
+          </Button>
+        </div>
+      }
+    >
+      <textarea className={styles.diagnosticsLog} readOnly value={text} />
+    </Modal>
+  )
 }
 
 const LocationSetting = () => {

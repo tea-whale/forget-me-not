@@ -33,6 +33,7 @@ import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -77,6 +78,10 @@ public class MainActivity extends Activity {
         MIME_TYPES.put("gif", "image/gif");
         MIME_TYPES.put("webp", "image/webp");
         MIME_TYPES.put("ico", "image/x-icon");
+        MIME_TYPES.put("bmp", "image/bmp");
+        MIME_TYPES.put("heic", "image/heic");
+        MIME_TYPES.put("heif", "image/heif");
+        MIME_TYPES.put("avif", "image/avif");
         MIME_TYPES.put("woff", "font/woff");
         MIME_TYPES.put("woff2", "font/woff2");
         MIME_TYPES.put("ttf", "font/ttf");
@@ -291,7 +296,9 @@ public class MainActivity extends Activity {
             String[] accept = params.getAcceptTypes();
             if (accept != null) {
                 for (String entry : accept) {
-                    if (entry != null && entry.contains("/")) {
+                    // 通配类型（image/*）只用于页面的接受列表，不能拿来过滤选择器，
+                    // 否则聊天框的附件按钮会变成只能选图片。
+                    if (entry != null && entry.contains("/") && !entry.endsWith("/*")) {
                         mimes.add(entry);
                     }
                 }
@@ -387,35 +394,61 @@ public class MainActivity extends Activity {
                 String guessed = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime);
                 extension = guessed == null ? "" : guessed.toLowerCase(Locale.ROOT);
             }
-            boolean imageByMime = mime.startsWith("image/");
-            boolean heic = extension.equals("heic") || extension.equals("heif")
-                    || mime.contains("heic") || mime.contains("heif");
-            boolean supportedImage = IMAGE_EXTS.contains(extension);
+            boolean image = mime.startsWith("image/") || IMAGE_EXTS.contains(extension);
             File directory = PickedFileProvider.cacheDir(this);
             String stamp = Long.toString(System.currentTimeMillis(), 36)
                     + Integer.toString((int) (Math.random() * 1296), 36);
             String base = baseNameOf(displayName);
             if (base.isEmpty()) {
-                base = imageByMime || supportedImage ? "image" : "file";
+                base = image ? "image" : "file";
             }
-            File target;
-            if ((imageByMime || supportedImage) && (heic || !supportedImage)) {
-                target = new File(directory, base + "-" + stamp + ".jpg");
-                if (!transcodeToJpeg(source, target)) {
-                    return source;
-                }
-            } else {
-                if (extension.isEmpty()) {
-                    extension = "bin";
-                }
-                target = new File(directory, base + "-" + stamp + "." + extension);
+            if (image) {
+                // 先原样落盘，再按文件头判断真实格式：很多相册返回的文件叫 .jpg 但内容是
+                // HEIC，直接上传会让页面缩略图黑掉、模型也读不出图。
+                File copy = new File(directory,
+                        base + "-" + stamp + "." + (extension.isEmpty() ? "img" : extension));
                 try (InputStream input = resolver.openInputStream(source);
-                     OutputStream output = new FileOutputStream(target)) {
+                     OutputStream output = new FileOutputStream(copy)) {
                     if (input == null) {
                         return source;
                     }
                     copy(input, output);
                 }
+                if (copy.length() <= 0) {
+                    //noinspection ResultOfMethodCallIgnored
+                    copy.delete();
+                    return source;
+                }
+                String actual = sniffImageExt(copy);
+                if (isPageImageExt(actual)) {
+                    File target = new File(directory, base + "-" + stamp + "." + actual);
+                    if (copy.renameTo(target)) {
+                        return pickedUri(target);
+                    }
+                }
+                File target = new File(directory, base + "-" + stamp + ".jpg");
+                if (transcodeToJpeg(source, target) && target.length() > 0) {
+                    //noinspection ResultOfMethodCallIgnored
+                    copy.delete();
+                    return pickedUri(target);
+                }
+                //noinspection ResultOfMethodCallIgnored
+                target.delete();
+                //noinspection ResultOfMethodCallIgnored
+                copy.delete();
+                // 转码失败时退回原件：页面 accept 里带了 image/*，原件同样能被接收
+                return source;
+            }
+            if (extension.isEmpty()) {
+                extension = "bin";
+            }
+            File target = new File(directory, base + "-" + stamp + "." + extension);
+            try (InputStream input = resolver.openInputStream(source);
+                 OutputStream output = new FileOutputStream(target)) {
+                if (input == null) {
+                    return source;
+                }
+                copy(input, output);
             }
             if (target.length() <= 0) {
                 // An empty copy would make the page show a broken attachment.
@@ -423,11 +456,67 @@ public class MainActivity extends Activity {
                 target.delete();
                 return source;
             }
-            return Uri.parse("content://" + PickedFileProvider.AUTHORITY + "/" + target.getName());
+            return pickedUri(target);
         } catch (IOException | RuntimeException | OutOfMemoryError error) {
             Log.w(TAG, "Cannot normalize picked file", error);
             return source;
         }
+    }
+
+    private static Uri pickedUri(File file) {
+        return Uri.parse("content://" + PickedFileProvider.AUTHORITY + "/" + file.getName());
+    }
+
+    /** 页面自己会解码的图片格式，直接沿用原文件，不重新压缩 */
+    private static boolean isPageImageExt(String extension) {
+        return "jpg".equals(extension) || "png".equals(extension)
+                || "gif".equals(extension) || "webp".equals(extension);
+    }
+
+    /**
+     * 读文件头判断真实图片格式，返回 jpg / png / gif / webp / heic / avif，认不出时返回空串。
+     * 相册给的 MIME 和后缀都不可靠，按字节判断才不会把 HEIC 当成 JPEG 传给服务端。
+     */
+    private static String sniffImageExt(File file) {
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] head = new byte[12];
+            int read = 0;
+            while (read < head.length) {
+                int count = input.read(head, read, head.length - read);
+                if (count < 0) {
+                    break;
+                }
+                read += count;
+            }
+            if (read >= 3 && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8
+                    && (head[2] & 0xFF) == 0xFF) {
+                return "jpg";
+            }
+            if (read >= 4 && (head[0] & 0xFF) == 0x89 && head[1] == 'P' && head[2] == 'N'
+                    && head[3] == 'G') {
+                return "png";
+            }
+            if (read >= 3 && head[0] == 'G' && head[1] == 'I' && head[2] == 'F') {
+                return "gif";
+            }
+            if (read >= 12 && head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F'
+                    && head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P') {
+                return "webp";
+            }
+            if (read >= 12 && head[4] == 'f' && head[5] == 't' && head[6] == 'y' && head[7] == 'p') {
+                String brand = new String(head, 8, 4, StandardCharsets.US_ASCII).toLowerCase(Locale.ROOT);
+                if (brand.startsWith("hei") || brand.startsWith("hev") || brand.startsWith("mif")
+                        || brand.startsWith("msf")) {
+                    return "heic";
+                }
+                if (brand.startsWith("avi")) {
+                    return "avif";
+                }
+            }
+        } catch (IOException error) {
+            Log.w(TAG, "Cannot sniff picked image", error);
+        }
+        return "";
     }
 
     /** Re-encodes an unsupported image (for example HEIC) as a JPEG the page accepts. */

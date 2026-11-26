@@ -13,11 +13,14 @@ export const Welcome = () => {
     <div className={styles.container}>
       {isMobile ? <MobileHeader /> : null}
       <div className={styles.welcome}>
-        <div className={styles.avatar}>
-          <AssistantAvatar size={isMobile ? 64 : 76} editable />
-          <span className={styles.avatarHint}>{t('avatarSetCaption')}</span>
+        {/* 头像和问候语作为一组，移动端整组居中，避免头像孤零零挂在顶部 */}
+        <div className={styles.hero}>
+          <div className={styles.avatar}>
+            <AssistantAvatar size={isMobile ? 64 : 76} editable />
+            <span className={styles.avatarHint}>{t('avatarSetCaption')}</span>
+          </div>
+          <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>
         </div>
-        <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>
         <ChatInput sessionId={null} />
         {isMobile ? <div className={styles.caveat}>{t('contentCaveat')}</div> : null}
       </div>

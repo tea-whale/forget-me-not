@@ -1,4 +1,5 @@
 import { translate, type TranslationMessage } from '../../i18n/index.js'
+import { diag } from '../diagnostics.js'
 import { resizeUploadImage } from '../../utils/resizeUploadImage.js'
 import { readMessageEvent } from './parseEvent.js'
 import { readServerSentEvents } from './sse.js'
@@ -75,10 +76,15 @@ export const request = async (url: string, init: RequestInit): Promise<Response>
     if (init.signal?.aborted) {
       throw error
     }
-    throw new ApiError('network', error instanceof Error ? error.message : String(error))
+    const message = error instanceof Error ? error.message : String(error)
+    diag(`网络失败 ${init.method ?? 'GET'} ${url} → ${message}`)
+    throw new ApiError('network', message)
   }
   if (!response.ok) {
-    throw await readErrorResponse(response)
+    const error = await readErrorResponse(response)
+    // 手机端没有开发者工具，失败原因记进诊断日志，用户可在设置里复制出来
+    diag(`HTTP ${response.status} ${init.method ?? 'GET'} ${url} → ${error.message}`)
+    throw error
   }
   return response
 }
@@ -114,6 +120,10 @@ export const uploadFile = async (
     form.append('purpose', purpose)
   }
   form.append('file', purpose === null ? await resizeUploadImage(file, signal) : file)
+  const payload = form.get('file')
+  if (payload instanceof File) {
+    diag(`上传 ${payload.name} ${payload.type || '未知类型'} ${Math.round(payload.size / 1024)}KB`)
+  }
   const response = await request(`${ANTHROPIC_BASE_URL}/files`, {
     method: 'POST',
     headers: anthropicHeaders(apiKey, true),

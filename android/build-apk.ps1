@@ -13,8 +13,11 @@ $Platform = 'android-35'
 $BuildTools = Join-Path $Sdk "build-tools\$BuildToolsVersion"
 $AndroidJar = Join-Path $Sdk "platforms\$Platform\android.jar"
 $Keystore = [IO.Path]::GetFullPath((Join-Path $Sdk '..\debug.keystore'))
-$VersionName = '1.1.6'
-$VersionCode = '8'
+# 版本号以 package.json 为准，避免页面显示的版本和 APK 内的版本对不上
+$VersionName = (Get-Content (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json).version
+if (-not $VersionName) { throw 'Cannot read version from package.json' }
+# Android 的 versionCode 必须是整数，每发一版加 1
+$VersionCode = '9'
 $MinSdk = '26'
 $TargetSdk = '34'
 

@@ -16,12 +16,19 @@
   padding: 0 32px 64px;
 }
 
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
 .avatar {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 16px;
 }
 
 .avatarHint {
@@ -67,6 +74,11 @@
 
   .greeting {
     flex-shrink: 0;
+    margin: 0;
+  }
+
+  /* 头像和问候语整组居中，输入框留在底部 */
+  .hero {
     margin: auto 0;
   }
 
